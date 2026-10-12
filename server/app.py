@@ -69,6 +69,8 @@ infer_pool = ThreadPoolExecutor(1, thread_name_prefix="infer")
 hook_pool = ThreadPoolExecutor(1, thread_name_prefix="hook")
 infer_lock = asyncio.Lock()   # one detection at a time; waiters are served in turn (FIFO)
 clients = 0
+# Counters for the statistics page (see /api/activity).
+activity = {"detections": 0, "busy_ms": 0.0, "waiting": 0}
 
 
 # ---------------------------------------------------------------- access
@@ -232,10 +234,20 @@ async def detect(stream: Optional[Stream], data: bytes, model: str, size: int, c
     conf = min(max(conf, 0.01), 0.99)
     iou = min(max(iou, 0.05), 0.95)
     t_wait = time.perf_counter()
-    async with infer_lock:
+    activity["waiting"] += 1
+    try:
+        await infer_lock.acquire()
+    finally:
+        activity["waiting"] -= 1
+    try:
         wait_ms = (time.perf_counter() - t_wait) * 1000
+        t_run = time.perf_counter()
         image, detections, (in_w, in_h), ms = await asyncio.get_running_loop().run_in_executor(
             infer_pool, _decode_and_detect, data, model, size, conf, iou)
+        activity["detections"] += 1
+        activity["busy_ms"] += (time.perf_counter() - t_run) * 1000
+    finally:
+        infer_lock.release()
     h, w = image.shape[:2]
     result = {"type": "result", "stream": stream.name if stream else None, "seq": 0, "t": time.time(),
               "width": w, "height": h, "model": model, "input": [in_w, in_h], "conf": conf, "iou": iou,
@@ -393,6 +405,17 @@ async def subscribe_ws(ws: WebSocket, name: str, code: str = "", frames: int = 0
 def info() -> dict:
     return {"models": list(MODELS), "sizes": list(SIZES), "max_fps": MAX_FPS, "hook": HOOK or None,
             "providers": detector.providers, "access_code_required": True}
+
+
+@app.get("/api/activity")
+def get_activity(request: Request) -> dict:
+    """Counts for the server statistics page, from this machine only (a request
+    that came through Apache carries X-Forwarded-For and is refused)."""
+    if request.headers.get("x-forwarded-for"):
+        raise HTTPException(403, "local only")
+    return {"cameras": sum(1 for s in streams.values() if s.publisher),
+            "subscribers": sum(len(s.subscribers) for s in streams.values()),
+            "streams": len(streams), "clients": clients, **activity}
 
 
 @app.get("/api/streams")

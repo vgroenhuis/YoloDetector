@@ -20,6 +20,7 @@ All paths are relative to the server's address (`https://closer.ram.eemcs.utwent
 |---|---|
 | `GET api/info` | models, input sizes, limits, hook (no code needed) |
 | `POST api/detect?model=yolov8n&size=480&conf=0.25&iou=0.45&stream=` | body: a JPEG or PNG. Returns its detections. With `stream=name`, it also goes to that stream's subscribers and the hook (a camera that isn't a browser). |
+| `GET api/activity` | counts for the server statistics page (cameras, subscribers, detections, busy time); local only, refused when it comes through Apache |
 | `GET api/streams` | the streams: name, camera connected, frame count, subscribers |
 | `GET api/streams/<name>/latest` | the stream's latest result |
 | `GET api/streams/<name>/latest.jpg` | its frame |
