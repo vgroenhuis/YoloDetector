@@ -15,6 +15,10 @@ Live object detection on your device's camera with [Ultralytics YOLOv8](https://
 - **Boxes in sync**: shows the frame the boxes were computed on, instead of the live video. The live video is smoother, but its boxes lag by one detection.
 - **Open image** runs the detector on a photo instead of the camera.
 
+## Detection on the server
+
+**Process on: the server** sends the frames to the YOLO server on the CloSer server (needs its access code), which also passes the detections on to a robot controller or other program subscribed to the page's **Stream**. See [server/README.md](server/README.md).
+
 ## Run locally
 
 ```

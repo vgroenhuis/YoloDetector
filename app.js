@@ -43,6 +43,21 @@ const gpuChecked = {};       // model@input size -> passed the WebGPU self-test
 let gpuName = '';            // the WebGPU adapter, for the HUD
 let notice = '';             // why WebGPU isn't used, for the HUD
 
+// Detection on the server (server/ in the repository): the page on GitHub
+// Pages uses the CloSer server; the page served by the server, itself.
+const SERVER_URL = params.get('server') ||
+  (location.hostname.endsWith('github.io') ? 'https://closer.ram.eemcs.utwente.nl/yolo/' : new URL('.', location.href).href);
+let mode = 'device';         // 'device' | 'server' (Process on)
+let srv = null;              // the server connection: {ws, ready, pending, name}
+let srvBlocked = '';         // why not to reconnect (wrong code, ...) until the settings change
+let srvSeq = 0;
+let hookText = '';           // the server hook's latest message
+const sendCanvas = document.createElement('canvas');
+const sendCtx = sendCanvas.getContext('2d');
+
+function store(key, value) { try { localStorage.setItem('yolo.' + key, value); } catch (e) { /* no storage */ } }
+function stored(key) { try { return localStorage.getItem('yolo.' + key); } catch (e) { return null; } }
+
 // ---------------------------------------------------------------- loading
 
 function loadScript(src) {
@@ -70,6 +85,15 @@ async function pickBackend() {
   return 'wasm';
 }
 
+let ortReady = null;
+function ensureOrt() {
+  if (!ortReady) {
+    ortReady = (async () => { await initOrt(); await getSession($('model').value); })();
+    ortReady.catch(() => { ortReady = null; });
+  }
+  return ortReady;
+}
+
 async function initOrt() {
   backend = await pickBackend();
   await loadScript(ORT_URL + (backend === 'webgpu' ? 'ort.webgpu.min.js' : 'ort.wasm.min.js'));
@@ -77,7 +101,7 @@ async function initOrt() {
   ort.env.logLevel = 'error';
   // Threads need a cross-origin isolated page, which GitHub Pages doesn't serve.
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-  $('size').value = params.get('size') || (backend === 'webgpu' ? '640' : '480');
+  if (!params.get('size') && backend === 'webgpu' && mode === 'device') $('size').value = '640';
   $('backend').value = params.get('backend') || 'auto';
 }
 
@@ -194,7 +218,7 @@ function thresholds() {
 }
 
 function refilter() {
-  if (last) detections = postprocess(last, ...thresholds());
+  if (last) detections = last.server ? filterServer(last) : postprocess(last, ...thresholds());
   updateHud();
 }
 
@@ -241,6 +265,8 @@ async function gpuSelfTest(session, modelName, size) {
 }
 
 async function detect(source, frameW, frameH) {
+  if (mode === 'server') return serverDetect(source, frameW, frameH);
+  await ensureOrt();
   const modelName = $('model').value, size = +$('size').value;
   const session = await getSession(modelName);
   const checkKey = `${modelName}@${size}`;
@@ -283,6 +309,95 @@ async function detect(source, frameW, frameH) {
   updateHud();
 }
 
+// ---------------------------------------------------------------- the server
+
+function connectServer() {
+  if (srv) return srv.ready;
+  if (srvBlocked) return Promise.reject(new Error(srvBlocked));
+  const url = SERVER_URL.replace(/^http/, 'ws').replace(/\/?$/, '/') + 'ws';
+  const ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  const conn = {ws, pending: new Map(), name: ''};
+  srv = conn;
+  setStatus('Connecting to the server...');
+  conn.ready = new Promise((resolve, reject) => {
+    ws.onopen = () => ws.send(JSON.stringify({type: 'hello', code: $('code').value, stream: $('streamname').value.trim()}));
+    ws.onmessage = ev => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'welcome') { conn.name = msg.stream; resolve(conn); }
+      else if (msg.type === 'result') {
+        conn.pending.get(msg.client_seq)?.resolve(msg);
+        conn.pending.delete(msg.client_seq);
+      } else if (msg.type === 'hook') {
+        const d = msg.data;
+        hookText = d && typeof d === 'object' && 'text' in d ? String(d.text) : JSON.stringify(d);
+        updateHud();
+      } else if (msg.type === 'error') {
+        if (msg.client_seq != null && conn.pending.has(msg.client_seq)) {
+          conn.pending.get(msg.client_seq).reject(new Error(msg.message));
+          conn.pending.delete(msg.client_seq);
+        } else {
+          conn.error = msg.message;
+        }
+      }
+    };
+    ws.onclose = ev => {
+      const why = conn.error || `the connection to the server closed (${ev.code})`;
+      // Wrong code, stream in use, server full: don't retry until the settings change.
+      if ([4000, 4001, 4003, 4009].includes(ev.code)) srvBlocked = 'Server: ' + why;
+      for (const p of conn.pending.values()) p.reject(new Error('Server: ' + why));
+      conn.pending.clear();
+      if (srv === conn) srv = null;
+      reject(new Error('Server: ' + why));
+    };
+  });
+  conn.ready.catch(() => {});
+  return conn.ready;
+}
+
+function disconnectServer() {
+  srvBlocked = '';
+  hookText = '';
+  if (srv) { const ws = srv.ws; srv = null; ws.close(); }
+}
+
+// Sends the frame (as a JPEG, longest side the input size) and waits for its
+// detections. The server sends them in the JPEG's pixels.
+async function serverDetect(source, frameW, frameH) {
+  const conn = await connectServer();
+  const modelName = $('model').value, size = +$('size').value;
+  const r = Math.min(1, size / Math.max(frameW, frameH));
+  const w = Math.round(frameW * r), h = Math.round(frameH * r);
+  if (sendCanvas.width !== w || sendCanvas.height !== h) { sendCanvas.width = w; sendCanvas.height = h; }
+  sendCtx.drawImage(source, 0, 0, w, h);
+  if (snapCanvas.width !== frameW || snapCanvas.height !== frameH) { snapCanvas.width = frameW; snapCanvas.height = frameH; }
+  snapCtx.drawImage(source, 0, 0, frameW, frameH);
+  const blob = await new Promise(res => sendCanvas.toBlob(res, 'image/jpeg', 0.85));
+  const seq = ++srvSeq, t0 = performance.now();
+  const reply = new Promise((resolve, reject) => {
+    conn.pending.set(seq, {resolve, reject});
+    setTimeout(() => { if (conn.pending.delete(seq)) reject(new Error('Server: no answer')); }, 20000);
+  });
+  // The thresholds are applied on the server: its stream's subscribers and
+  // hook get what this page shows.
+  conn.ws.send(JSON.stringify({type: 'frame', seq, model: modelName, size, conf: +$('conf').value / 100, iou: +$('iou').value / 100}));
+  conn.ws.send(await blob.arrayBuffer());
+  const res = await reply;
+  const all = res.detections.map(d => ({cls: d.cls, score: d.score, x1: d.x1 / r, y1: d.y1 / r, x2: d.x2 / r, y2: d.y2 / r}));
+  last = {server: true, all, frameW, frameH, inW: res.input[0], inH: res.input[1], ms: res.ms,
+          rtt: performance.now() - t0, model: res.model, backend: 'server', stream: conn.name};
+  detections = filterServer(last);
+  const now = performance.now();
+  fpsTimes.push(now);
+  while (fpsTimes.length && now - fpsTimes[0] > 2000) fpsTimes.shift();
+  updateHud();
+}
+
+function filterServer(res) {
+  const conf = +$('conf').value / 100;
+  return res.all.filter(d => d.score >= conf).slice(0, MAX_DETECTIONS);
+}
+
 async function detectLoop() {
   while (running) {
     if (!paused && !image && video.readyState >= 2 && video.videoWidth) {
@@ -291,7 +406,7 @@ async function detectLoop() {
         await detect(video, video.videoWidth, video.videoHeight);
       } catch (e) {
         showError(e);
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, mode === 'server' ? 2000 : 1000));
       }
       busy = false;
     }
@@ -358,9 +473,13 @@ function updateHud() {
   const list = [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])
     .map(([c, k]) => k > 1 ? `${COCO[c]} x${k}` : COCO[c]).join(', ');
   const fps = fpsTimes.length > 1 ? (fpsTimes.length - 1) / ((fpsTimes[fpsTimes.length - 1] - fpsTimes[0]) / 1000) : 0;
-  const head = `${last.model} | ${last.backend === 'webgpu' ? `WebGPU${gpuName ? ` (${gpuName})` : ''}` : 'WebAssembly'} | input ${last.inW}x${last.inH}` +
-    ` | ${last.ms.toFixed(0)} ms` + (image || paused ? '' : ` | ${fps.toFixed(1)} fps`) + (paused ? ' | paused' : '');
-  $('hud').textContent = `${head}\n${detections.length ? list : 'nothing detected'}` + (notice ? `\n${notice}` : '');
+  const where = last.server ? 'server' : last.backend === 'webgpu' ? `WebGPU${gpuName ? ` (${gpuName})` : ''}` : 'WebAssembly';
+  const time = last.server ? `${last.ms.toFixed(0)} ms (${last.rtt.toFixed(0)} ms round trip)` : `${last.ms.toFixed(0)} ms`;
+  const head = `${last.model} | ${where} | input ${last.inW}x${last.inH} | ${time}` +
+    (image || paused ? '' : ` | ${fps.toFixed(1)} fps`) + (paused ? ' | paused' : '') +
+    (last.server ? ` | stream ${last.stream}` : '');
+  const extra = last.server ? (hookText ? `\n> ${hookText}` : '') : (notice ? `\n${notice}` : '');
+  $('hud').textContent = `${head}\n${detections.length ? list : 'nothing detected'}${extra}`;
 }
 
 function showError(e) {
@@ -424,6 +543,9 @@ async function detectImage() {
 
 $('conf').oninput = () => { $('confv').textContent = $('conf').value + '%'; refilter(); };
 $('iou').oninput = () => { $('iouv').textContent = (+$('iou').value / 100).toFixed(2); refilter(); };
+// On the server the thresholds are applied there: detect an image again
+// (a lower confidence threshold shows more boxes only after that).
+$('iou').onchange = $('conf').onchange = () => { if (mode === 'server') detectImage(); };
 $('model').onchange = () => { fpsTimes = []; detectImage(); };
 $('size').onchange = () => { fpsTimes = []; detectImage(); };
 $('flip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; startCamera(); };
@@ -446,14 +568,42 @@ $('backend').onchange = () => {
 };
 $('more').onclick = () => document.body.classList.toggle('showopts');
 
-(async () => {
-  try {
-    await initOrt();
-    await getSession($('model').value);
-    setStatus(`Ready (${backend === 'webgpu' ? 'WebGPU' : 'WebAssembly'}).`);
+// Process on, access code and stream: on the start screen and in the settings.
+function setMode(value) {
+  mode = value === 'server' ? 'server' : 'device';
+  $('where').value = $('where0').value = mode;
+  document.body.classList.toggle('server', mode === 'server');
+  store('where', mode);
+  fpsTimes = [];
+  if (mode === 'device') {
+    disconnectServer();
+    $('go').disabled = $('go-img').disabled = true;
+    ensureOrt().then(() => {
+      setStatus(`Ready (${backend === 'webgpu' ? 'WebGPU' : 'WebAssembly'}).`);
+      $('go').disabled = $('go-img').disabled = false;
+      detectImage();
+    }).catch(e => { $('status').textContent = ''; showError(e); });
+  } else {
+    setStatus('Ready: detection on the server.');
     $('go').disabled = $('go-img').disabled = false;
-  } catch (e) {
-    $('status').textContent = '';
-    showError(e);
+    detectImage();
   }
-})();
+}
+
+function pair(a, b, key, onChange) {
+  for (const [x, y] of [[a, b], [b, a]]) {
+    $(x).addEventListener('change', () => { $(y).value = $(x).value; store(key, $(x).value); onChange(); });
+  }
+}
+
+$('where0').onchange = () => setMode($('where0').value);
+$('where').onchange = () => setMode($('where').value);
+const serverSettingsChanged = () => { disconnectServer(); if (mode === 'server') detectImage(); };
+pair('code0', 'code', 'code', serverSettingsChanged);
+pair('streamname0', 'streamname', 'stream', serverSettingsChanged);
+$('code').value = $('code0').value = params.get('code') || stored('code') || '';
+$('streamname').value = $('streamname0').value = stored('stream') ||
+  'cam-' + Math.random().toString(36).slice(2, 6);
+store('stream', $('streamname').value);
+if (params.get('size')) $('size').value = params.get('size');
+setMode(params.get('where') || stored('where') || 'device');

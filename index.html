@@ -25,6 +25,10 @@
   #start a.home{position:absolute;top:calc(12px + env(safe-area-inset-top));left:16px}
   #err{color:#f88;max-width:34em}
   .hidden{display:none !important}
+  body:not(.server) .srv, body.server .dev{display:none !important}
+  #start .where{display:flex;flex-direction:column;gap:10px;align-items:center}
+  #start .where label{display:flex;gap:8px;align-items:center}
+  input[type=text],input[type=password]{font:inherit;padding:5px 8px;width:9em}
   /* On a phone the settings take half the screen: behind a button. */
   #more{display:none}
   @media (max-width:700px){ #more{display:inline-block} body:not(.showopts) #bar .opt{display:none} }
@@ -42,8 +46,11 @@
     <option value="yolov8s">YOLOv8s (better, 45 MB)</option>
     <option value="yolov8m">YOLOv8m (best, slow, 52 MB)</option>
   </select></label>
-  <label class="opt" title="Where the model runs: WebGPU (the graphics processor) or WebAssembly (the processor). Auto picks WebGPU when it works on this device. Changing it reloads the page.">Run on <select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="wasm">WebAssembly</option></select></label>
-  <label class="opt">Input size <select id="size"><option>320</option><option>480</option><option>640</option></select></label>
+  <label class="opt" title="Where the detector runs: on this device (in the browser), or on the server (frames are sent there; needs the access code). Detection on the server also goes to the stream's subscribers, such as a robot controller.">Process on <select id="where"><option value="device">this device</option><option value="server">the server</option></select></label>
+  <label class="opt srv">Access code <input id="code" type="password" autocomplete="off"></label>
+  <label class="opt srv" title="The name robot controllers subscribe to (letters, digits, . _ -)">Stream <input id="streamname" type="text" autocomplete="off" spellcheck="false"></label>
+  <label class="opt dev" title="Where the model runs: WebGPU (the graphics processor) or WebAssembly (the processor). Auto picks WebGPU when it works on this device. Changing it reloads the page.">Run on <select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="wasm">WebAssembly</option></select></label>
+  <label class="opt">Input size <select id="size"><option>320</option><option selected>480</option><option>640</option></select></label>
   <label class="opt">Min confidence <input id="conf" type="range" min="5" max="95" value="25"> <span id="confv" class="val">25%</span></label>
   <label class="opt">Overlap (NMS IoU) <input id="iou" type="range" min="10" max="95" value="45"> <span id="iouv" class="val">0.45</span></label>
   <label class="opt" title="Draw the frame the boxes were computed on, instead of the live video: the boxes then line up exactly, but the video updates only as often as the detector runs"><input id="sync" type="checkbox"> boxes in sync</label>
@@ -58,7 +65,12 @@
   <a class="home" href="https://vgroenhuis.github.io/">&larr; Vincent Groenhuis</a>
   <div style="font-size:22px">YOLOv8 object detector</div>
   <div class="note">Detects 80 kinds of everyday objects (people, vehicles, animals, food, furniture...) in your camera's view.
-    The model runs on your own device, in the browser: no image leaves it.</div>
+    The model runs on your own device, in the browser (no image leaves it), or on the CloSer server.</div>
+  <div class="where">
+    <label>Process on <select id="where0"><option value="device">this device</option><option value="server">the server</option></select></label>
+    <label class="srv">Access code <input id="code0" type="password" autocomplete="off"></label>
+    <label class="srv" title="The name robot controllers subscribe to (letters, digits, . _ -)">Stream <input id="streamname0" type="text" autocomplete="off" spellcheck="false"></label>
+  </div>
   <button id="go" disabled>Start camera</button>
   <button id="go-img" disabled>Open an image</button>
   <div id="status" class="note">Loading the detector...</div>
