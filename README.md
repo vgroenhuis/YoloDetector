@@ -5,7 +5,7 @@ Live object detection on your device's camera with [Ultralytics YOLOv8](https://
 **Live page:** https://vgroenhuis.github.io/YoloDetector/ (needs HTTPS for camera access; open it on your phone and tap *Start camera*).
 
 - Detects the 80 [COCO](https://cocodataset.org/) classes: people, vehicles, animals, food, furniture, ...
-- Models: YOLOv8n (fast, 13 MB, default) and YOLOv8s (more accurate, 45 MB). The model is downloaded once and then cached by the browser.
+- Models: YOLOv8n (fast, 13 MB, default), YOLOv8s (more accurate, 45 MB) and YOLOv8m (most accurate, about 2.5x slower than YOLOv8s, 52 MB). The model is downloaded once and then cached by the browser.
 - Runs on the GPU with WebGPU where available, otherwise on the CPU with WebAssembly ([onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/)). A software (emulated) GPU, or one that is slower than about 1.5 s per frame, makes it switch to WebAssembly. Force a backend with `?backend=wasm` or `?backend=webgpu`, and the input size with `?size=320`.
 - **Input size**: the frame's longest side as the model sees it (320, 480 or 640 pixels; the other side keeps the aspect ratio). Smaller is faster, larger finds smaller objects. Default 640 on WebGPU, 480 on WebAssembly.
 - **Min confidence** and **Overlap (NMS IoU)**: the detection threshold, and how much two boxes of the same class may overlap before the weaker one is dropped (non-maximum suppression).
@@ -21,7 +21,7 @@ then open http://localhost:8000 (opening `index.html` directly does not work). C
 
 ## Models
 
-`models/*.onnx` are the official YOLOv8n/s COCO weights (ultralytics 8.4.175), exported with `tools/export_models.py`: dynamic input size, opset 17, output `[1, 84, anchors]` (box centre, size and 80 class scores per anchor), without NMS. The page letterboxes the frame like Ultralytics (grey padding to a multiple of 32), and does the NMS itself.
+`models/*.onnx` are the official YOLOv8n/s/m COCO weights (ultralytics 8.4.175), exported with `tools/export_models.py`: dynamic input size, opset 17, output `[1, 84, anchors]` (box centre, size and 80 class scores per anchor), without NMS. YOLOv8m's weights are stored as float16 (cast back to float32 on loading; the model still computes in float32), to stay under GitHub's 100 MB file limit: its results differ from the float32 model by about 0.01 pixel. The page letterboxes the frame like Ultralytics (grey padding to a multiple of 32), and does the NMS itself.
 
 ## Licence
 

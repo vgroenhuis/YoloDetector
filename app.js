@@ -38,7 +38,7 @@ let last = null;             // {raw, n, map, frameW, frameH, inW, inH, ms}
 let detections = [];
 let busy = false;            // an inference is running
 let fpsTimes = [];
-let gpuRuns = 0;             // inferences on WebGPU so far (see detect)
+const gpuRuns = {};          // model@input size -> inferences on WebGPU (see detect)
 
 // ---------------------------------------------------------------- loading
 
@@ -204,15 +204,18 @@ async function detect(source, frameW, frameH) {
   const raw = tensor.data;   // copied to the CPU
   input.dispose?.();
   const ms = performance.now() - t0;
-  // The first runs on WebGPU compile its shaders; if it's still slow after
-  // that, the GPU is a poor one (or emulated): WebAssembly does better.
-  if (backend === 'webgpu' && ++gpuRuns >= 2 && ms > 1500) {
+  const used = backend;
+  // The first run of a model on WebGPU, at each input size, compiles its
+  // shaders; if the next one is still slow, the GPU is a poor one (or
+  // emulated): WebAssembly does better.
+  const runKey = `${modelName}@${inW}x${inH}`;
+  if (backend === 'webgpu' && (gpuRuns[runKey] = (gpuRuns[runKey] || 0) + 1) >= 2 && ms > 1500) {
     console.warn(`WebGPU takes ${ms.toFixed(0)} ms, using WebAssembly`);
     backend = 'wasm';
     for (const k in sessions) delete sessions[k];
     $('size').value = '480';
   }
-  last = {raw, n: tensor.dims[2], map, frameW, frameH, inW, inH, ms, model: modelName};
+  last = {raw, n: tensor.dims[2], map, frameW, frameH, inW, inH, ms, model: modelName, backend: used};
   detections = postprocess(last, ...thresholds());
   const now = performance.now();
   fpsTimes.push(now);
@@ -295,7 +298,7 @@ function updateHud() {
   const list = [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])
     .map(([c, k]) => k > 1 ? `${COCO[c]} x${k}` : COCO[c]).join(', ');
   const fps = fpsTimes.length > 1 ? (fpsTimes.length - 1) / ((fpsTimes[fpsTimes.length - 1] - fpsTimes[0]) / 1000) : 0;
-  const head = `${last.model} | ${backend === 'webgpu' ? 'WebGPU' : 'WebAssembly'} | input ${last.inW}x${last.inH}` +
+  const head = `${last.model} | ${last.backend === 'webgpu' ? 'WebGPU' : 'WebAssembly'} | input ${last.inW}x${last.inH}` +
     ` | ${last.ms.toFixed(0)} ms` + (image || paused ? '' : ` | ${fps.toFixed(1)} fps`) + (paused ? ' | paused' : '');
   $('hud').textContent = `${head}\n${detections.length ? list : 'nothing detected'}`;
 }
