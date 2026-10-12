@@ -568,6 +568,11 @@ $('backend').onchange = () => {
 };
 $('more').onclick = () => document.body.classList.toggle('showopts');
 
+// Served by the CloSer server (server/): link back to its project page.
+if (location.hostname === 'closer.ram.eemcs.utwente.nl') {
+  for (const a of document.querySelectorAll('a.home')) { a.href = '/'; a.textContent = '\u2190 CloSer projects'; }
+}
+
 // Process on, access code and stream: on the start screen and in the settings.
 function setMode(value) {
   mode = value === 'server' ? 'server' : 'device';
