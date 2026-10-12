@@ -6,7 +6,7 @@ Live at https://closer.ram.eemcs.utwente.nl/yolo/ (the page, served by this serv
 
 ## How it works
 
-- A **camera** (the page, or any program) sends JPEG frames; each comes back with its detections. One detection runs at a time; waiting cameras take turns, and each is capped at `YOLO_MAX_FPS`.
+- A **camera** (the page, or any program) sends JPEG frames; each comes back with its detections. One detection runs at a time; waiting cameras take turns, and each can be capped at `YOLO_MAX_FPS` frames per second (0, the default: no cap).
 - Every camera publishes to a **stream** (the *Stream* name in the page's settings). **Subscribers** to a stream receive each frame's detections, and optionally the frame itself.
 - A **hook** (optional) is Python code on the server, called with every frame and its detections; what it returns goes to the camera's page (its `text` is shown there) and to the subscribers. See `hooks/example.py`, which steers towards the largest person.
 
@@ -51,4 +51,4 @@ server/.venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8110     # from 
 
 On the CloSer server it runs as `yolo-server.service` (`~/closer-deploy/yolo-server.service`, installed by `~/closer-deploy/setup-yolo.sh`), behind Apache at `/yolo/` (`~/closer-deploy/apache/50-yolo.conf`), with `Nice=10` so the SOFA simulations come first. After a code change: `git pull` in `~/YoloDetector`, then `sudo systemctl restart yolo-server`.
 
-On a server with an NVIDIA GPU: install `onnxruntime-gpu` instead of `onnxruntime` and set `YOLO_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider` (and raise `YOLO_MAX_FPS`).
+On a server with an NVIDIA GPU: install `onnxruntime-gpu` instead of `onnxruntime` and set `YOLO_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider`.

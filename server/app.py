@@ -52,7 +52,7 @@ _load_env(Path(__file__).resolve().parent / ".env")
 
 ACCESS_CODE = os.environ.get("YOLO_ACCESS_CODE", "")
 THREADS = int(os.environ.get("YOLO_THREADS", "1"))          # onnxruntime threads (the CPU is shared)
-MAX_FPS = float(os.environ.get("YOLO_MAX_FPS", "10"))       # per camera
+MAX_FPS = float(os.environ.get("YOLO_MAX_FPS", "0"))        # per camera; 0: no cap
 MAX_CLIENTS = int(os.environ.get("YOLO_MAX_CLIENTS", "8"))  # cameras + subscribers
 HOOK = os.environ.get("YOLO_HOOK", "")                      # e.g. server.hooks.example
 PROVIDERS = tuple(p.strip() for p in os.environ.get("YOLO_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip())
@@ -313,7 +313,7 @@ async def camera_ws(ws: WebSocket) -> None:
             delay = next_allowed - time.monotonic()
             if delay > 0:
                 await asyncio.sleep(delay)
-            next_allowed = time.monotonic() + 1.0 / MAX_FPS
+            next_allowed = time.monotonic() + (1.0 / MAX_FPS if MAX_FPS > 0 else 0.0)
             try:
                 result = await detect(stream, data, str(meta.get("model", "yolov8n")), int(meta.get("size", 480)),
                                       float(meta.get("conf", 0.25)), float(meta.get("iou", 0.45)),
@@ -434,7 +434,7 @@ async def detect_http(request: Request, model: str = "yolov8n", size: int = 480,
     delay = _post_next.get(key, 0.0) - time.monotonic()
     if delay > 0:
         await asyncio.sleep(delay)
-    _post_next[key] = time.monotonic() + 1.0 / MAX_FPS
+    _post_next[key] = time.monotonic() + (1.0 / MAX_FPS if MAX_FPS > 0 else 0.0)
     data = await request.body()
     try:
         target = get_stream(stream) if stream else None
