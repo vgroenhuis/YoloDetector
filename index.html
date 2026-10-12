@@ -42,6 +42,7 @@
     <option value="yolov8s">YOLOv8s (better, 45 MB)</option>
     <option value="yolov8m">YOLOv8m (best, slow, 52 MB)</option>
   </select></label>
+  <label class="opt" title="Where the model runs: WebGPU (the graphics processor) or WebAssembly (the processor). Auto picks WebGPU when it works on this device. Changing it reloads the page.">Run on <select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="wasm">WebAssembly</option></select></label>
   <label class="opt">Input size <select id="size"><option>320</option><option>480</option><option>640</option></select></label>
   <label class="opt">Min confidence <input id="conf" type="range" min="5" max="95" value="25"> <span id="confv" class="val">25%</span></label>
   <label class="opt">Overlap (NMS IoU) <input id="iou" type="range" min="10" max="95" value="45"> <span id="iouv" class="val">0.45</span></label>

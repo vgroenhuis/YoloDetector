@@ -39,6 +39,9 @@ let detections = [];
 let busy = false;            // an inference is running
 let fpsTimes = [];
 const gpuRuns = {};          // model@input size -> inferences on WebGPU (see detect)
+const gpuChecked = {};       // model@input size -> passed the WebGPU self-test
+let gpuName = '';            // the WebGPU adapter, for the HUD
+let notice = '';             // why WebGPU isn't used, for the HUD
 
 // ---------------------------------------------------------------- loading
 
@@ -57,7 +60,11 @@ async function pickBackend() {
     try {
       const adapter = await navigator.gpu.requestAdapter();
       // A software (CPU) WebGPU adapter is far slower than WebAssembly.
-      if (adapter && (want === 'webgpu' || !(adapter.info?.isFallbackAdapter || adapter.isFallbackAdapter))) return 'webgpu';
+      if (adapter && (want === 'webgpu' || !(adapter.info?.isFallbackAdapter || adapter.isFallbackAdapter))) {
+        const info = adapter.info || {};
+        gpuName = [info.vendor, info.architecture].filter(Boolean).join(' ');
+        return 'webgpu';
+      }
     } catch (e) { /* no WebGPU */ }
   }
   return 'wasm';
@@ -71,6 +78,7 @@ async function initOrt() {
   // Threads need a cross-origin isolated page, which GitHub Pages doesn't serve.
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
   $('size').value = params.get('size') || (backend === 'webgpu' ? '640' : '480');
+  $('backend').value = params.get('backend') || 'auto';
 }
 
 async function fetchWithProgress(url, onProgress) {
@@ -190,9 +198,63 @@ function refilter() {
   updateHud();
 }
 
+function switchToWasm(reason) {
+  console.warn(reason + ', using WebAssembly');
+  notice = reason + ': using WebAssembly.';
+  backend = 'wasm';
+  for (const k in sessions) delete sessions[k];
+  $('size').value = '480';
+}
+
+// Some GPUs (seen on phones) run the model on WebGPU but return wrong
+// numbers. So before a model is used on WebGPU at an input size, it
+// detects selftest.jpg, and the result is compared with what WebAssembly
+// finds there (selftest.json, made with tools/make_selftest.py).
+let selftest = null;
+function loadSelftest() {
+  if (!selftest) {
+    selftest = Promise.all([
+      fetch('selftest.jpg').then(r => r.blob()).then(b => createImageBitmap(b)),
+      fetch('selftest.json').then(r => r.json()),
+    ]);
+    selftest.catch(() => { selftest = null; });
+  }
+  return selftest;
+}
+
+async function gpuSelfTest(session, modelName, size) {
+  let img, expected;
+  try { [img, expected] = await loadSelftest(); } catch (e) { console.warn('No self-test', e); return true; }
+  const want = expected[modelName]?.[size];
+  if (!want) return true;
+  const {data, inW, inH, map} = preprocess(img, img.width, img.height, size);
+  const out = await session.run({[session.inputNames[0]]: new ort.Tensor('float32', data, [1, 3, inH, inW])});
+  const tensor = out[session.outputNames[0]];
+  const raw = tensor.data;
+  for (let i = 0; i < raw.length; i++) if (!Number.isFinite(raw[i])) return false;
+  const found = postprocess({raw, n: tensor.dims[2], map, frameW: img.width, frameH: img.height}, 0.25, 0.45);
+  // Each confident detection of WebAssembly found again, and not many more.
+  const ok = want.every(e => found.some(d => d.cls === e.cls && overlap(d, e) > 0.6)) &&
+    found.filter(d => d.score >= 0.5).length <= want.length + 3;
+  if (!ok) console.warn(`WebGPU self-test of ${modelName}@${size} failed`, {want, found});
+  return ok;
+}
+
 async function detect(source, frameW, frameH) {
   const modelName = $('model').value, size = +$('size').value;
   const session = await getSession(modelName);
+  const checkKey = `${modelName}@${size}`;
+  if (backend === 'webgpu' && !(checkKey in gpuChecked)) {
+    setStatus(`Checking ${modelName} on WebGPU...`);
+    gpuChecked[checkKey] = await gpuSelfTest(session, modelName, size);
+    if (!gpuChecked[checkKey]) {
+      if (params.get('backend') !== 'webgpu') {
+        switchToWasm('WebGPU gave wrong results on this device');
+        return detect(source, frameW, frameH);
+      }
+      notice = 'WebGPU gave wrong results in the self-test (forced WebGPU).';
+    }
+  }
   const t0 = performance.now();
   const {data, inW, inH, map} = preprocess(source, frameW, frameH, size);
   // The analysed frame, for "boxes in sync" and pause.
@@ -209,11 +271,9 @@ async function detect(source, frameW, frameH) {
   // shaders; if the next one is still slow, the GPU is a poor one (or
   // emulated): WebAssembly does better.
   const runKey = `${modelName}@${inW}x${inH}`;
-  if (backend === 'webgpu' && (gpuRuns[runKey] = (gpuRuns[runKey] || 0) + 1) >= 2 && ms > 1500) {
-    console.warn(`WebGPU takes ${ms.toFixed(0)} ms, using WebAssembly`);
-    backend = 'wasm';
-    for (const k in sessions) delete sessions[k];
-    $('size').value = '480';
+  if (backend === 'webgpu' && (gpuRuns[runKey] = (gpuRuns[runKey] || 0) + 1) >= 2 && ms > 1500 &&
+      params.get('backend') !== 'webgpu') {
+    switchToWasm(`WebGPU took ${(ms / 1000).toFixed(1)} s per frame`);
   }
   last = {raw, n: tensor.dims[2], map, frameW, frameH, inW, inH, ms, model: modelName, backend: used};
   detections = postprocess(last, ...thresholds());
@@ -298,9 +358,9 @@ function updateHud() {
   const list = [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])
     .map(([c, k]) => k > 1 ? `${COCO[c]} x${k}` : COCO[c]).join(', ');
   const fps = fpsTimes.length > 1 ? (fpsTimes.length - 1) / ((fpsTimes[fpsTimes.length - 1] - fpsTimes[0]) / 1000) : 0;
-  const head = `${last.model} | ${last.backend === 'webgpu' ? 'WebGPU' : 'WebAssembly'} | input ${last.inW}x${last.inH}` +
+  const head = `${last.model} | ${last.backend === 'webgpu' ? `WebGPU${gpuName ? ` (${gpuName})` : ''}` : 'WebAssembly'} | input ${last.inW}x${last.inH}` +
     ` | ${last.ms.toFixed(0)} ms` + (image || paused ? '' : ` | ${fps.toFixed(1)} fps`) + (paused ? ' | paused' : '');
-  $('hud').textContent = `${head}\n${detections.length ? list : 'nothing detected'}`;
+  $('hud').textContent = `${head}\n${detections.length ? list : 'nothing detected'}` + (notice ? `\n${notice}` : '');
 }
 
 function showError(e) {
@@ -378,6 +438,12 @@ $('pause').onclick = () => {
 $('openimg').onclick = $('go-img').onclick = () => $('file').click();
 $('file').onchange = () => { openImage($('file').files[0]); $('file').value = ''; };
 $('go').onclick = startCamera;
+$('backend').onchange = () => {
+  const q = new URLSearchParams(location.search);
+  if ($('backend').value === 'auto') q.delete('backend'); else q.set('backend', $('backend').value);
+  q.delete('size');
+  location.search = q.toString();
+};
 $('more').onclick = () => document.body.classList.toggle('showopts');
 
 (async () => {

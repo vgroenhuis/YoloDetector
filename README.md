@@ -6,7 +6,10 @@ Live object detection on your device's camera with [Ultralytics YOLOv8](https://
 
 - Detects the 80 [COCO](https://cocodataset.org/) classes: people, vehicles, animals, food, furniture, ...
 - Models: YOLOv8n (fast, 13 MB, default), YOLOv8s (more accurate, 45 MB) and YOLOv8m (most accurate, about 2.5x slower than YOLOv8s, 52 MB). The model is downloaded once and then cached by the browser.
-- Runs on the GPU with WebGPU where available, otherwise on the CPU with WebAssembly ([onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/)). A software (emulated) GPU, or one that is slower than about 1.5 s per frame, makes it switch to WebAssembly. Force a backend with `?backend=wasm` or `?backend=webgpu`, and the input size with `?size=320`.
+- Runs on the GPU with WebGPU where available, otherwise on the CPU with WebAssembly ([onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/)). Choose it under **Run on** (Auto, WebGPU, WebAssembly), or with `?backend=webgpu` / `?backend=wasm` in the URL; `?size=320` sets the input size. In Auto mode it switches to WebAssembly when WebGPU:
+  - is a software (emulated) GPU;
+  - gives wrong results: before a model is used on WebGPU at an input size, it detects `selftest.jpg` and compares the result with what WebAssembly finds there (`selftest.json`, made with `tools/make_selftest.py`; some phone GPUs return garbage, such as dozens of "boats" at the top of the image);
+  - takes more than 1.5 s per frame (after the first frame, which compiles the GPU code).
 - **Input size**: the frame's longest side as the model sees it (320, 480 or 640 pixels; the other side keeps the aspect ratio). Smaller is faster, larger finds smaller objects. Default 640 on WebGPU, 480 on WebAssembly.
 - **Min confidence** and **Overlap (NMS IoU)**: the detection threshold, and how much two boxes of the same class may overlap before the weaker one is dropped (non-maximum suppression).
 - **Boxes in sync**: shows the frame the boxes were computed on, instead of the live video. The live video is smoother, but its boxes lag by one detection.
